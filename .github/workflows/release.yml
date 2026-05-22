@@ -19,4 +19,4 @@ jobs:
   release:
     uses: crosstalkis/shared-workflows/.github/workflows/conjur-fetch.yml@v1
     with:
-      app-name: beta  # R1 T1 impersonation test — REVERT after capture
+      app-name: alpha
