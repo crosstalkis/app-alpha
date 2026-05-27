@@ -1,0 +1,169 @@
+name: SoD Verification Matrix (v2)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  CONJUR_URL: "https://conjur-oss.conjur.svc.cluster.local"
+  CONJUR_ACCOUNT: "lab"
+  CONJUR_CACERT: "/etc/conjur/ssl/ca.pem"
+
+jobs:
+  # Case 1: POSITIVE — prod env, alpha-prod host, alpha/prod/db-password
+  case1-prod-reads-prod:
+    runs-on: lab-runners
+    environment: prod
+    steps:
+      - name: "Case 1: prod -> alpha/prod/db-password (expect SUCCESS)"
+        run: |
+          set -euo pipefail
+
+          jwt=$(curl -sSf \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=conjur/lab" | jq -r '.value')
+          echo "::add-mask::${jwt}"
+
+          HOST_ID="host%2Falpha%2Falpha-prod"
+          http_auth=$(curl -sS -o /tmp/auth -w '%{http_code}' \
+            --cacert "${CONJUR_CACERT}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "jwt=${jwt}" \
+            "${CONJUR_URL}/authn-jwt/gha-v2/${CONJUR_ACCOUNT}/${HOST_ID}/authenticate")
+
+          if [[ "${http_auth}" != "200" ]]; then
+            echo "::error::CASE 1 FAIL — Auth returned ${http_auth} (expected 200)"
+            cat /tmp/auth >&2; exit 1
+          fi
+
+          token=$(cat /tmp/auth); echo "::add-mask::${token}"
+          token_b64=$(printf '%s' "${token}" | base64 -w0); echo "::add-mask::${token_b64}"
+
+          http_fetch=$(curl -sS -o /tmp/secret -w '%{http_code}' \
+            --cacert "${CONJUR_CACERT}" \
+            -H "Authorization: Token token=\"${token_b64}\"" \
+            "${CONJUR_URL}/secrets/${CONJUR_ACCOUNT}/variable/alpha%2Fprod%2Fdb-password")
+
+          if [[ "${http_fetch}" == "200" ]]; then
+            echo "CASE 1 PASS — prod env fetched alpha/prod/db-password"
+          else
+            echo "::error::CASE 1 FAIL — Fetch returned ${http_fetch} (expected 200)"
+            exit 1
+          fi
+
+  # Case 2: POSITIVE — dev env, alpha-dev host, alpha/dev/db-password
+  case2-dev-reads-dev:
+    runs-on: lab-runners
+    environment: dev
+    steps:
+      - name: "Case 2: dev -> alpha/dev/db-password (expect SUCCESS)"
+        run: |
+          set -euo pipefail
+
+          jwt=$(curl -sSf \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=conjur/lab" | jq -r '.value')
+          echo "::add-mask::${jwt}"
+
+          HOST_ID="host%2Falpha%2Falpha-dev"
+          http_auth=$(curl -sS -o /tmp/auth -w '%{http_code}' \
+            --cacert "${CONJUR_CACERT}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "jwt=${jwt}" \
+            "${CONJUR_URL}/authn-jwt/gha-v2/${CONJUR_ACCOUNT}/${HOST_ID}/authenticate")
+
+          if [[ "${http_auth}" != "200" ]]; then
+            echo "::error::CASE 2 FAIL — Auth returned ${http_auth} (expected 200)"
+            cat /tmp/auth >&2; exit 1
+          fi
+
+          token=$(cat /tmp/auth); echo "::add-mask::${token}"
+          token_b64=$(printf '%s' "${token}" | base64 -w0); echo "::add-mask::${token_b64}"
+
+          http_fetch=$(curl -sS -o /tmp/secret -w '%{http_code}' \
+            --cacert "${CONJUR_CACERT}" \
+            -H "Authorization: Token token=\"${token_b64}\"" \
+            "${CONJUR_URL}/secrets/${CONJUR_ACCOUNT}/variable/alpha%2Fdev%2Fdb-password")
+
+          if [[ "${http_fetch}" == "200" ]]; then
+            echo "CASE 2 PASS — dev env fetched alpha/dev/db-password"
+          else
+            echo "::error::CASE 2 FAIL — Fetch returned ${http_fetch} (expected 200)"
+            exit 1
+          fi
+
+  # Case 3a: NEGATIVE — dev env tries to auth as alpha-prod (env mismatch -> 401)
+  case3a-dev-auths-prod:
+    runs-on: lab-runners
+    environment: dev
+    steps:
+      - name: "Case 3a: dev env -> auth as alpha-prod (expect 401)"
+        run: |
+          set -euo pipefail
+
+          jwt=$(curl -sSf \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=conjur/lab" | jq -r '.value')
+          echo "::add-mask::${jwt}"
+
+          HOST_ID="host%2Falpha%2Falpha-prod"
+          http_auth=$(curl -sS -o /tmp/auth -w '%{http_code}' \
+            --cacert "${CONJUR_CACERT}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "jwt=${jwt}" \
+            "${CONJUR_URL}/authn-jwt/gha-v2/${CONJUR_ACCOUNT}/${HOST_ID}/authenticate")
+
+          if [[ "${http_auth}" == "401" ]]; then
+            echo "CASE 3a PASS — dev env correctly rejected at authn (401)"
+          else
+            echo "::error::CASE 3a FAIL — Expected 401, got ${http_auth}"
+            cat /tmp/auth >&2; exit 1
+          fi
+
+  # Case 3b: NEGATIVE — dev env, auth as alpha-dev (OK), fetch prod secret (403)
+  case3b-dev-reads-prod:
+    runs-on: lab-runners
+    environment: dev
+    steps:
+      - name: "Case 3b: alpha-dev -> alpha/prod/db-password (expect 403)"
+        run: |
+          set -euo pipefail
+
+          jwt=$(curl -sSf \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=conjur/lab" | jq -r '.value')
+          echo "::add-mask::${jwt}"
+
+          HOST_ID="host%2Falpha%2Falpha-dev"
+          http_auth=$(curl -sS -o /tmp/auth -w '%{http_code}' \
+            --cacert "${CONJUR_CACERT}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "jwt=${jwt}" \
+            "${CONJUR_URL}/authn-jwt/gha-v2/${CONJUR_ACCOUNT}/${HOST_ID}/authenticate")
+
+          if [[ "${http_auth}" != "200" ]]; then
+            echo "::error::CASE 3b SETUP FAIL — alpha-dev authn returned ${http_auth} (expected 200)"
+            cat /tmp/auth >&2; exit 1
+          fi
+
+          token=$(cat /tmp/auth); echo "::add-mask::${token}"
+          token_b64=$(printf '%s' "${token}" | base64 -w0); echo "::add-mask::${token_b64}"
+
+          http_fetch=$(curl -sS -o /tmp/secret -w '%{http_code}' \
+            --cacert "${CONJUR_CACERT}" \
+            -H "Authorization: Token token=\"${token_b64}\"" \
+            "${CONJUR_URL}/secrets/${CONJUR_ACCOUNT}/variable/alpha%2Fprod%2Fdb-password")
+
+          if [[ "${http_fetch}" == "403" ]]; then
+            echo "CASE 3b PASS — alpha-dev correctly denied alpha/prod/db-password (403)"
+          else
+            echo "::error::CASE 3b FAIL — Expected 403, got ${http_fetch}"
+            exit 1
+          fi
