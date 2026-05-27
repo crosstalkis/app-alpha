@@ -161,9 +161,11 @@ jobs:
             -H "Authorization: Token token=\"${token_b64}\"" \
             "${CONJUR_URL}/secrets/${CONJUR_ACCOUNT}/variable/alpha%2Fprod%2Fdb-password")
 
-          if [[ "${http_fetch}" == "403" ]]; then
-            echo "CASE 3b PASS — alpha-dev correctly denied alpha/prod/db-password (403)"
+          # Conjur returns 404 (not 403) when a role lacks permission —
+          # this hides resource existence from unauthorized roles.
+          if [[ "${http_fetch}" == "404" ]]; then
+            echo "CASE 3b PASS — alpha-dev correctly denied alpha/prod/db-password (404)"
           else
-            echo "::error::CASE 3b FAIL — Expected 403, got ${http_fetch}"
+            echo "::error::CASE 3b FAIL — Expected 404, got ${http_fetch}"
             exit 1
           fi
